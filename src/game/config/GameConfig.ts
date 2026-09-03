@@ -1,4 +1,4 @@
-export const GAME_INFO = {
+﻿export const GAME_INFO = {
   id: 'pulso-runner',
   name: 'Pulso Runner',
   version: '1.1.0',
@@ -19,8 +19,8 @@ export const PHYSICS_CONFIG = {
 
   // Logical character size. The source PNG is fitted into this box,
   // so a large source image cannot make the player huge.
-  playerHeight: 58,
-  playerWidth: 58,
+  playerHeight: 80,
+  playerWidth: 80,
 
   groundHeight: 42,
   hitboxWidthRatio: 0.58,

@@ -1,4 +1,6 @@
-﻿import { GamePlatform, GameResult } from './GamePlatform';
+﻿// src/cubaplay/WebTestPlatform.ts
+
+import { GamePlatform, GameResult } from './GamePlatform';
 
 export class WebTestPlatform implements GamePlatform {
   async initialize(): Promise<void> { console.log('[WebTest] Plataforma lista'); }
@@ -11,5 +13,5 @@ export class WebTestPlatform implements GamePlatform {
     alert('Fin! Puntos: ' + result.score);
   }
   
-  exitGame() { window.location.reload(); }
+  exitGame() { /* No hacemos nada para no recargar */ }
 }
