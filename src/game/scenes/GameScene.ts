@@ -9,6 +9,7 @@ export class GameScene extends Phaser.Scene {
   private platform!: GamePlatform;
   private place!: Place;
   private fondo!: Phaser.GameObjects.TileSprite;
+  private calle!: Phaser.GameObjects.TileSprite;
   private player!: Phaser.Physics.Arcade.Sprite;
   private obstacles!: Phaser.Physics.Arcade.Group;
   private scoreText!: Phaser.GameObjects.Text;
@@ -20,6 +21,24 @@ export class GameScene extends Phaser.Scene {
   private isVictory = false;
   private distanceSinceObstacle = 0;
   private nextObstacleDistance = 420;
+  private readonly GROUND_OFFSET = 20;
+
+  // --- Control de obstáculos / meta ---
+  // En vez de decidir la meta por el score (lo cual dejaba obstáculos "en vuelo"
+  // apareciendo después de la bandera), contamos exactamente cuántos obstáculos
+  // se generan y cuántos hacen falta para este mapa. Así sabemos con certeza
+  // cuándo fue el ÚLTIMO obstáculo.
+  private obstaclesSpawned = 0;
+  private maxObstacles = Infinity; // Infinity para el modo 'infinito'
+
+  // Ancho de la bandera, usado para calcular su posición real en el mundo
+  // (el hijo del contenedor tiene coordenadas LOCALES, no absolutas).
+  private readonly flagWidth = 50;
+
+  // Control de la bandera
+  private finishLine?: Phaser.GameObjects.Container;  // ← contenedor con bandera + texto
+  private finishTriggered = false;
+  private finishLineReached = false;
 
   constructor() {
     super('GameScene');
@@ -36,41 +55,45 @@ export class GameScene extends Phaser.Scene {
       frameHeight: 500
     });
     this.load.image('fondo', '/assets/fondo.png');
-    this.load.image('cav-bg', '/assets/fondo.png');
+    this.load.image('cav-bg', '/assets/cav-bg.png');
     this.load.image('desert-bg', '/assets/desert-bg.png');
     this.load.image('city-bg', '/assets/city-bg.png');
     this.load.image('volcano-bg', '/assets/volcano-bg.png');
     this.load.image('barrel', '/assets/barrel.png');
+    this.load.image('calle', '/assets/calle.png');
+    this.load.image('flag', '/assets/flag.png'); // Asegúrate de tener este archivo
   }
 
   create() {
+    // Fondo lejano
     this.fondo = this.add.tileSprite(0, 0, this.scale.width, this.scale.height, this.place.backgroundKey);
     this.fondo.setOrigin(0, 0).setDepth(-1);
     this.fondo.tilePositionY = 510;
-
-    this.startTime = performance.now();
-    this.score = 0;
-    this.speed = PHYSICS_CONFIG.baseSpeed;
-    this.isGameOver = false;
-    this.isVictory = false;
-    this.distanceSinceObstacle = 0;
-    this.nextObstacleDistance = 420;
 
     const w = this.scale.width;
     const h = this.scale.height;
     const groundY = h - PHYSICS_CONFIG.groundHeight;
 
+    // --- CALLE VISUAL ---
+    this.calle = this.add.tileSprite(0, groundY, w, PHYSICS_CONFIG.groundHeight, 'calle');
+    this.calle.setOrigin(0, 0);
+    this.calle.setDepth(0);
+
+    // --- SUELO FÍSICO ---
+    const physicalGroundY = groundY + this.GROUND_OFFSET;
+    const groundHeightPhysical = PHYSICS_CONFIG.groundHeight - this.GROUND_OFFSET;
     const ground = this.add.rectangle(
       w / 2,
-      groundY + PHYSICS_CONFIG.groundHeight / 2,
+      physicalGroundY + groundHeightPhysical / 2,
       w,
-      PHYSICS_CONFIG.groundHeight,
+      groundHeightPhysical,
       0xffffff
     );
+    ground.setAlpha(0);
     this.physics.add.existing(ground, true);
-    this.add.rectangle(w / 2, groundY, w, 3, 0x333333);
 
-    this.player = this.physics.add.sprite(w * 0.12, groundY, 'player');
+    // --- JUGADOR ---
+    this.player = this.physics.add.sprite(w * 0.12, physicalGroundY, 'player');
     this.player.setOrigin(0.5, 1);
     this.player.setDisplaySize(PHYSICS_CONFIG.playerWidth, PHYSICS_CONFIG.playerHeight);
 
@@ -94,13 +117,11 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.add.collider(this.player, ground);
 
-    this.obstacles = this.physics.add.group({
-      allowGravity: false,
-      immovable: true
-    });
-
+    // --- OBSTÁCULOS ---
+    this.obstacles = this.physics.add.group({ allowGravity: false, immovable: true });
     this.physics.add.overlap(this.player, this.obstacles, () => this.gameOver());
 
+    // --- TEXTO Y CONTROLES ---
     this.scoreText = this.add.text(20, 16, '00000', {
       fontSize: '22px',
       fontFamily: 'monospace',
@@ -120,6 +141,25 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-SPACE', this.jump);
     this.input.keyboard?.on('keydown-UP', this.jump);
     this.input.on('pointerdown', this.jump);
+
+    // Inicializar variables
+    this.startTime = performance.now();
+    this.score = 0;
+    this.speed = PHYSICS_CONFIG.baseSpeed;
+    this.isGameOver = false;
+    this.isVictory = false;
+    this.distanceSinceObstacle = 0;
+    this.nextObstacleDistance = 420;
+    this.finishTriggered = false;
+    this.finishLineReached = false;
+    this.finishLine = undefined;
+
+    // Cada obstáculo vale 10 puntos, así que calculamos exactamente cuántos
+    // obstáculos hacen falta para llegar (o superar) el targetScore del mapa.
+    this.obstaclesSpawned = 0;
+    this.maxObstacles = this.place.id === 'infinito'
+      ? Infinity
+      : Math.max(1, Math.ceil(this.place.targetScore / 10));
   }
 
   update(_time: number, delta: number) {
@@ -130,20 +170,32 @@ export class GameScene extends Phaser.Scene {
     const h = this.scale.height;
     const groundY = h - PHYSICS_CONFIG.groundHeight;
 
+    // Movimiento del fondo lejano
     if (this.fondo) {
       this.fondo.tilePositionX += this.speed * 0.6 * dt;
     }
 
-    this.distanceSinceObstacle += this.speed * dt;
-    if (this.distanceSinceObstacle >= this.nextObstacleDistance) {
-      this.spawnObstacle(w, groundY);
-      this.distanceSinceObstacle = 0;
-      this.nextObstacleDistance = Phaser.Math.Between(
-        PHYSICS_CONFIG.minObstacleGap,
-        PHYSICS_CONFIG.maxObstacleGap
-      );
+    // Movimiento de la calle
+    if (this.calle) {
+      this.calle.tilePositionX += this.speed * dt;
     }
 
+    // --- GENERACIÓN DE OBSTÁCULOS ---
+    // Solo generamos mientras no hayamos alcanzado el número máximo de
+    // obstáculos para este mapa (en 'infinito' nunca se detiene).
+    if (this.obstaclesSpawned < this.maxObstacles) {
+      this.distanceSinceObstacle += this.speed * dt;
+      if (this.distanceSinceObstacle >= this.nextObstacleDistance) {
+        this.spawnObstacle(w, groundY);
+        this.distanceSinceObstacle = 0;
+        this.nextObstacleDistance = Phaser.Math.Between(
+          PHYSICS_CONFIG.minObstacleGap,
+          PHYSICS_CONFIG.maxObstacleGap
+        );
+      }
+    }
+
+    // --- ACTUALIZAR OBSTÁCULOS Y PUNTUACIÓN ---
     this.obstacles.children.each((child: Phaser.GameObjects.GameObject) => {
       const obs = child as Phaser.Physics.Arcade.Sprite;
       obs.x -= this.speed * dt;
@@ -156,11 +208,6 @@ export class GameScene extends Phaser.Scene {
         if (this.score % PHYSICS_CONFIG.speedEveryPoints === 0) {
           this.speed += PHYSICS_CONFIG.speedIncrement;
         }
-
-        if (this.place.id !== 'infinito' && this.score >= this.place.targetScore) {
-          this.victory();
-          return false;
-        }
       }
 
       if (obs.x + obs.displayWidth < -30) {
@@ -168,6 +215,46 @@ export class GameScene extends Phaser.Scene {
       }
       return true;
     });
+
+    // --- DETECCIÓN DE META ---
+    // Solo activamos la bandera cuando:
+    //  1) Ya generamos todos los obstáculos que le corresponden a este mapa.
+    //  2) Ya NO queda ningún obstáculo vivo en pantalla (todos pasados/destruidos).
+    // Esto garantiza que jamás pueda verse un obstáculo después de la bandera.
+    if (
+      this.place.id !== 'infinito' &&
+      !this.finishTriggered &&
+      this.obstaclesSpawned >= this.maxObstacles &&
+      this.obstacles.getLength() === 0
+    ) {
+      this.triggerFinish(groundY);
+    }
+
+    // --- MOVIMIENTO Y DETECCIÓN DE LA BANDERA (contenedor) ---
+    if (this.finishLine && !this.finishLineReached) {
+      // Movemos todo el contenedor (bandera + texto) a la izquierda
+      this.finishLine.x -= this.speed * dt;
+
+      // IMPORTANTE: this.finishLine.x SÍ es la posición real (mundial) del
+      // contenedor. Los hijos (flagImage, metaText) tienen coordenadas
+      // LOCALES relativas al contenedor (por eso están en 0,0) — usar su
+      // .x directamente aquí era el bug: siempre valía 0, así que la
+      // condición se cumplía casi al instante y la victoria se disparaba
+      // antes de que la bandera llegara visualmente al jugador.
+      const flagRightEdge = this.finishLine.x + this.flagWidth / 2;
+      if (flagRightEdge < this.player.x) {
+        this.finishLineReached = true;
+        this.victory();
+        return;
+      }
+
+      // Si el contenedor sale de la pantalla por la izquierda
+      if (this.finishLine.x + this.flagWidth < -50) {
+        this.finishLine.destroy();
+        this.finishLine = undefined;
+        this.victory();
+      }
+    }
   }
 
   private jump = () => {
@@ -179,6 +266,7 @@ export class GameScene extends Phaser.Scene {
   };
 
   private spawnObstacle(screenWidth: number, groundY: number) {
+    const physicalGroundY = groundY + this.GROUND_OFFSET;
     const baseWidth = 30;
     const baseHeight = 40;
     const scale = Phaser.Math.FloatBetween(1.4, 2.1);
@@ -187,7 +275,7 @@ export class GameScene extends Phaser.Scene {
 
     const obs = this.obstacles.create(
       screenWidth + width / 2,
-      groundY - height / 2,
+      physicalGroundY - height / 2,
       'barrel'
     ) as Phaser.Physics.Arcade.Sprite;
 
@@ -198,6 +286,59 @@ export class GameScene extends Phaser.Scene {
     body.setSize(width * 0.8, height * 0.8);
     body.setOffset((width - body.width) / 2, (height - body.height) / 2);
     obs.setData('passed', false);
+
+    this.obstaclesSpawned += 1;
+  }
+
+  /**
+   * Activa la meta: coloca la bandera a una distancia fija del jugador.
+   * Se llama únicamente cuando ya no hay ningún obstáculo pendiente ni
+   * en pantalla, así que a partir de aquí solo se ve la bandera.
+   */
+  private triggerFinish(groundY: number) {
+    if (this.finishTriggered) return;
+    this.finishTriggered = true;
+
+    const physicalGroundY = groundY + this.GROUND_OFFSET;
+    const flagHeight = 80;
+    const flagWidth = this.flagWidth;
+
+    // Distancia a la que aparecerá la bandera desde el jugador
+    const distanceToFlag = 800; // Aumentado de 600 a 800 para más separación
+
+    const startX = this.player.x + distanceToFlag;
+
+    // Crear la imagen de la bandera (o usar gráfico si no hay imagen)
+    let flagImage: Phaser.GameObjects.Image;
+    if (this.textures.exists('flag')) {
+      flagImage = this.add.image(0, 0, 'flag');
+    } else {
+      // Si no existe 'flag', la generamos con Graphics
+      const g = this.add.graphics();
+      g.fillStyle(0xff0000);
+      g.fillRect(0, 0, flagWidth, flagHeight);
+      g.generateTexture('flag', flagWidth, flagHeight);
+      g.destroy();
+      flagImage = this.add.image(0, 0, 'flag');
+    }
+
+    flagImage.setDisplaySize(flagWidth, flagHeight);
+    flagImage.setOrigin(0.5, 0.5);
+    flagImage.setDepth(1);
+
+    // Texto "META"
+    const metaText = this.add.text(
+      0,
+      -flagHeight / 2 - 20,
+      '🏁 META',
+      { fontSize: '24px', fontFamily: 'Arial', color: '#ffffff', backgroundColor: '#e74c3c', padding: { x: 8, y: 4 } }
+    );
+    metaText.setOrigin(0.5, 0.5);
+    metaText.setDepth(2);
+
+    // Contenedor que agrupa la bandera y el texto
+    this.finishLine = this.add.container(startX, physicalGroundY - flagHeight / 2, [flagImage, metaText]);
+    this.finishLine.setDepth(1);
   }
 
   private gameOver() {
@@ -272,7 +413,6 @@ export class GameScene extends Phaser.Scene {
     const nextPlace = getNextPlace(updated);
 
     if (nextPlace) {
-      // Solo se muestra si realmente se desbloqueó un nuevo lugar
       this.add.text(width / 2, height / 2 + 40, `🔓 ¡Nuevo mapa desbloqueado: ${nextPlace.name}!`, {
         fontSize: '24px',
         fontFamily: 'Arial',
@@ -301,7 +441,6 @@ export class GameScene extends Phaser.Scene {
         this.scene.start('MenuScene');
       });
     } else {
-      // No hay más mapas o el actual ya estaba completado
       const allCompleted = updated.completed.length >= PLACES.filter(p => p.id !== 'infinito').length;
       if (allCompleted) {
         this.add.text(width / 2, height / 2 + 40, '🏁 ¡Has completado todos los mapas!', {

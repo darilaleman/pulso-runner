@@ -10,7 +10,7 @@ export class WebTestPlatform implements GamePlatform {
   async submitResult(result: GameResult): Promise<void> {
     console.log('JUEGO TERMINADO');
     console.log('Puntos: ' + result.score);
-    alert('Fin! Puntos: ' + result.score);
+    //alert('Fin! Puntos: ' + result.score);
   }
   
   exitGame() { /* No hacemos nada para no recargar */ }
