@@ -3,6 +3,7 @@ import { GamePlatform, GameResult } from '../../cubaplay/GamePlatform';
 import { GAME_INFO, PHYSICS_CONFIG } from '../config/GameConfig';
 
 export class GameScene extends Phaser.Scene {
+  private fondo!: Phaser.GameObjects.TileSprite;
   private platform: GamePlatform;
   private player!: Phaser.Physics.Arcade.Sprite;
   private obstacles!: Phaser.Physics.Arcade.Group;
@@ -21,12 +22,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   preload() {
-    // Keep the filename requested for the project.
-    // Place the file at: public/assets/pulse-runner.png
-    this.load.image('player', '/assets/pulso-running.png');
+    // Carga el spritesheet del robot (debe tener fotogramas de 58x58)
+    this.load.spritesheet('player', '/assets/pulso-running-sheet.png', {
+      frameWidth: 447,
+      frameHeight: 500
+    });
+
+    // Carga la imagen de fondo
+    this.load.image('fondo', '/assets/fondo.png');
+     this.load.image('barrel', '/assets/barrel.png');
   }
 
   create() {
+    // Fondo con TileSprite
+    this.fondo = this.add.tileSprite(0, 0, this.scale.width, this.scale.height, 'fondo');
+    this.fondo.setOrigin(0, 0).setDepth(-1);
+    this.fondo.tilePositionY = 510;
+
+    // Si tu fondo cubre toda la pantalla, puedes eliminar la línea de color sólido
+    // this.cameras.main.setBackgroundColor('#ffffff');
+
     this.startTime = performance.now();
     this.score = 0;
     this.speed = PHYSICS_CONFIG.baseSpeed;
@@ -38,10 +53,7 @@ export class GameScene extends Phaser.Scene {
     const h = this.scale.height;
     const groundY = h - PHYSICS_CONFIG.groundHeight;
 
-    // Background kept simple, like Chrome Dino.
-    this.cameras.main.setBackgroundColor('#ffffff');
-
-    // Ground.
+    // Suelo
     const ground = this.add.rectangle(
       w / 2,
       groundY + PHYSICS_CONFIG.groundHeight / 2,
@@ -53,29 +65,30 @@ export class GameScene extends Phaser.Scene {
 
     this.add.rectangle(w / 2, groundY, w, 3, 0x333333);
 
-    // Player. The visual size is explicitly controlled, independent of
-    // the source PNG's native resolution.
-    let textureKey = 'player';
-
-    if (!this.textures.exists('player')) {
-      textureKey = 'playerPlaceholder';
-      const g = this.make.graphics({ x: 0, y: 0, add: false });
-      g.fillStyle(0x222222);
-      g.fillCircle(29, 29, 22);
-      g.generateTexture(textureKey, 58, 58);
-      g.destroy();
-    }
-
-    this.player = this.physics.add.sprite(w * 0.12, groundY, textureKey);
+    // Jugador con spritesheet
+    this.player = this.physics.add.sprite(w * 0.12, groundY, 'player');
     this.player.setOrigin(0.5, 1);
     this.player.setDisplaySize(
       PHYSICS_CONFIG.playerWidth,
       PHYSICS_CONFIG.playerHeight
     );
 
-    // Prevent the player from ever visually going below the ground.
+    // Crear la animación de carrera (ajusta el número de fotogramas según tu spritesheet)
+    // Si tienes 4 fotogramas: end: 3. Si tienes 2: end: 1.
+    this.anims.create({
+      key: 'run',
+      frames: this.anims.generateFrameNumbers('player', { start: 0, end: 1 }),
+      frameRate: 10,   // Velocidad de la animación (ajústala a tu gusto)
+      repeat: -1       // Repetir indefinidamente
+    });
+
+    // Reproducir la animación
+    this.player.play('run');
+
+    // Prevenir que el jugador se salga de los límites
     this.player.setCollideWorldBounds(false);
 
+    // Ajustar hitbox
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const localWidth = this.player.width;
     const localHeight = this.player.height;
@@ -91,7 +104,7 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.add.collider(this.player, ground);
 
-    // Obstacles.
+    // Obstáculos
     this.obstacles = this.physics.add.group({
       allowGravity: false,
       immovable: true
@@ -103,7 +116,7 @@ export class GameScene extends Phaser.Scene {
       () => this.gameOver()
     );
 
-    // Score.
+    // Puntuación
     this.scoreText = this.add.text(20, 16, '00000', {
       fontSize: '22px',
       fontFamily: 'monospace',
@@ -111,7 +124,7 @@ export class GameScene extends Phaser.Scene {
       fontStyle: 'bold'
     });
 
-    // Controls: space / arrows / tap.
+    // Controles: espacio / flecha arriba / clic
     this.input.keyboard?.on('keydown-SPACE', this.jump);
     this.input.keyboard?.on('keydown-UP', this.jump);
     this.input.on('pointerdown', this.jump);
@@ -125,19 +138,25 @@ export class GameScene extends Phaser.Scene {
     const h = this.scale.height;
     const groundY = h - PHYSICS_CONFIG.groundHeight;
 
-    // Distance-based spawning gives the same feel regardless of FPS.
+    // Desplazamiento del fondo
+    if (this.fondo) {
+      const scrollSpeed = this.speed * 0.6;
+      this.fondo.tilePositionX += scrollSpeed * dt;
+    }
+
+    // Spawn de obstáculos basado en distancia
     this.distanceSinceObstacle += this.speed * dt;
 
     if (this.distanceSinceObstacle >= this.nextObstacleDistance) {
       this.spawnObstacle(w, groundY);
       this.distanceSinceObstacle = 0;
-
       this.nextObstacleDistance = Phaser.Math.Between(
         PHYSICS_CONFIG.minObstacleGap,
         PHYSICS_CONFIG.maxObstacleGap
       );
     }
 
+    // Mover obstáculos y actualizar puntuación
     this.obstacles.children.each((child: Phaser.GameObjects.GameObject) => {
       const obs = child as Phaser.Physics.Arcade.Sprite;
       obs.x -= this.speed * dt;
@@ -163,50 +182,41 @@ export class GameScene extends Phaser.Scene {
 
     const body = this.player.body as Phaser.Physics.Arcade.Body;
 
-    // Only jump when touching the ground, like Chrome Dino.
     if (body.blocked.down || body.touching.down) {
       body.setVelocityY(PHYSICS_CONFIG.jumpPower);
     }
   };
 
-  private spawnObstacle(screenWidth: number, groundY: number) {
-    const height = Phaser.Math.Between(32, 58);
-    const width = Phaser.Math.Between(18, 30);
+private spawnObstacle(screenWidth: number, groundY: number) {
+  // Tamaños base de la imagen (puedes usar el tamaño real o uno fijo)
+  const baseWidth = 30;
+  const baseHeight = 40;
 
-    const textureKey = `obstacle-${width}-${height}`;
+  // Escala aleatoria entre 0.5 y 1.5 (o el rango que quieras)
+  const scale = Phaser.Math.FloatBetween(1.4, 2.1);
 
-    if (!this.textures.exists(textureKey)) {
-      const g = this.make.graphics({ x: 0, y: 0, add: false });
-      g.fillStyle(0x333333);
-      g.fillRect(0, 0, width, height);
+  // Tamaño final
+  const width = baseWidth * scale;
+  const height = baseHeight * scale;
 
-      // Small side branch to make it feel less like a generic rectangle.
-      if (height > 42) {
-        g.fillRect(Math.floor(width * 0.55), Math.floor(height * 0.35), 12, 8);
-        g.fillRect(Math.floor(width * 0.25), Math.floor(height * 0.55), 10, 8);
-      }
+  // Crear el obstáculo
+  const obs = this.obstacles.create(
+    screenWidth + width / 2,
+    groundY - height / 2,
+    'barrel'
+  ) as Phaser.Physics.Arcade.Sprite;
 
-      g.generateTexture(textureKey, width, height);
-      g.destroy();
-    }
+  // Escalar la imagen al tamaño deseado
+  obs.setDisplaySize(width, height);
+  obs.setOrigin(0.5, 0.5);
 
-    const obs = this.obstacles.create(
-      screenWidth + width / 2,
-      groundY - height / 2,
-      textureKey
-    ) as Phaser.Physics.Arcade.Sprite;
+  // Ajustar hitbox proporcionalmente
+  const body = obs.body as Phaser.Physics.Arcade.Body;
+  body.setSize(width * 0.8, height * 0.8);
+  body.setOffset((width - body.width) / 2, (height - body.height) / 2);
 
-    obs.setOrigin(0.5, 0.5);
-
-    const body = obs.body as Phaser.Physics.Arcade.Body;
-    body.setSize(width * 0.78, height * 0.92);
-    body.setOffset(
-      (width - body.width) / 2,
-      (height - body.height)
-    );
-
-    obs.setData('passed', false);
-  }
+  obs.setData('passed', false);
+}
 
   private gameOver() {
     if (this.isGameOver) return;
@@ -214,6 +224,7 @@ export class GameScene extends Phaser.Scene {
     this.isGameOver = true;
     this.physics.pause();
     this.player.setTint(0x888888);
+    this.player.anims.stop(); // Detiene la animación al morir
 
     const duration = performance.now() - this.startTime;
 
